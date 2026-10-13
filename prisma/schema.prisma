@@ -1,0 +1,165 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CLIENT     // бизнес, который покупает рекламу
+  PUBLISHER  // админ канала
+  OWNER      // владелец сервиса
+}
+
+enum ChannelStatus {
+  PENDING   // ждёт проверки владельцем
+  APPROVED  // виден в каталоге
+  REJECTED
+  PAUSED    // админ временно не принимает рекламу
+}
+
+enum OrderStatus {
+  AWAITING_PAYMENT
+  PAID          // оплачен, ждём ответа админов
+  IN_PROGRESS   // хотя бы одно размещение принято или опубликовано
+  COMPLETED     // все размещения завершены
+  CANCELLED
+}
+
+enum PlacementStatus {
+  AWAITING_PAYMENT
+  PENDING     // ждёт решения админа
+  ACCEPTED    // админ принял, ждём публикации
+  REJECTED    // админ отказал → возврат клиенту
+  PUBLISHED   // пост вышел, идёт срок 24 часа
+  COMPLETED   // провисел срок, админу начислена выплата
+  FAILED      // пост удалён раньше срока → возврат клиенту
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+enum PayoutStatus {
+  PENDING
+  PAID
+}
+
+model User {
+  id             String    @id @default(cuid())
+  phone          String    @unique
+  name           String
+  passwordHash   String
+  role           Role      @default(CLIENT)
+  telegramChatId String?   @unique
+  linkCode       String    @unique @default(cuid())
+  createdAt      DateTime  @default(now())
+
+  channels       Channel[]
+  orders         Order[]
+}
+
+model Category {
+  id       String    @id
+  name     String
+  hint     String
+  color    String
+  sort     Int       @default(0)
+  channels Channel[]
+}
+
+model Channel {
+  id          String        @id @default(cuid())
+  username    String        @unique   // без @
+  title       String
+  categoryId  String
+  category    Category      @relation(fields: [categoryId], references: [id])
+  ownerId     String
+  owner       User          @relation(fields: [ownerId], references: [id])
+  subscribers Int
+  avgViews    Int           // средние просмотры поста за 24 ч
+  price       Int           // цена одного поста в сумах (столько получает админ)
+  rules       String?       // что админ не рекламирует
+  status      ChannelStatus @default(PENDING)
+  isDemo      Boolean       @default(false)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  placements  Placement[]
+}
+
+model Order {
+  id           String      @id @default(cuid())
+  clientId     String
+  client       User        @relation(fields: [clientId], references: [id])
+  status       OrderStatus @default(AWAITING_PAYMENT)
+  adText       String
+  link         String
+  promoCode    String?
+  desiredDate  DateTime?
+  adminTotal   Int         // сумма админам
+  fee          Int         // комиссия сервиса
+  total        Int         // к оплате
+  refunded     Int         @default(0)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  placements   Placement[]
+  payments     Payment[]
+}
+
+model Placement {
+  id           String          @id @default(cuid())
+  orderId      String
+  order        Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  channelId    String
+  channel      Channel         @relation(fields: [channelId], references: [id])
+  postIndex    Int             @default(1)   // 1-й, 2-й пост в том же канале
+  price        Int             // цена админу на момент заказа
+  fee          Int             // комиссия сервиса с этого поста
+  status       PlacementStatus @default(AWAITING_PAYMENT)
+  shortCode    String          @unique       // для короткой ссылки /r/CODE
+  postUrl      String?
+  publishedAt  DateTime?
+  checkedAt    DateTime?
+  views        Int             @default(0)
+  clicks       Int             @default(0)
+  rejectReason String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  clickEvents  Click[]
+  payout       Payout?
+}
+
+model Click {
+  id          String    @id @default(cuid())
+  placementId String
+  placement   Placement @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+}
+
+model Payment {
+  id         String        @id @default(cuid())
+  orderId    String
+  order      Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  provider   String        // click | payme | uzcard | invoice | stub
+  amount     Int
+  status     PaymentStatus @default(PENDING)
+  externalId String?
+  createdAt  DateTime      @default(now())
+}
+
+model Payout {
+  id          String       @id @default(cuid())
+  placementId String       @unique
+  placement   Placement    @relation(fields: [placementId], references: [id], onDelete: Cascade)
+  amount      Int
+  status      PayoutStatus @default(PENDING)
+  paidAt      DateTime?
+  createdAt   DateTime     @default(now())
+}
